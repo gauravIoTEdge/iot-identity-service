@@ -592,6 +592,8 @@ impl IdentityManager {
         provisioning: config::Provisioning,
         skip_if_backup_is_valid: bool,
     ) -> Result<aziot_identity_common::ProvisioningStatus, Error> {
+        // TODO: Delete any existing trust bundle provided by DPS. It may no longer be valid after reprovision.
+
         let device = match provisioning.provisioning {
             config::ProvisioningType::Manual {
                 iothub_hostname,
@@ -771,6 +773,10 @@ impl IdentityManager {
             }
         };
 
+        if let Some(trust_bundle) = state.trust_bundle {
+            self.save_trust_bundle(trust_bundle).await?;
+        }
+
         Ok(aziot_identity_common::IoTHubDevice {
             local_gateway_hostname: local_gateway_hostname
                 .unwrap_or_else(|| iothub_hostname.clone()),
@@ -778,6 +784,35 @@ impl IdentityManager {
             device_id,
             credentials,
         })
+    }
+
+    async fn save_trust_bundle(
+        &self,
+        trust_bundle: aziot_dps_client_async::model::TrustBundle,
+    ) -> Result<(), Error> {
+        let mut certificates = String::new();
+
+        for cert in trust_bundle.certificates {
+            certificates.push_str(&cert.certificate);
+
+            if certificates
+                .chars()
+                .last()
+                .expect("certs should not be empty")
+                != '\n'
+            {
+                certificates.push('\n');
+            }
+        }
+
+        // TODO: Decide on name and update the iotedge tool to auth identityd for this cert.
+        let cert_id = "dps-trust-bundle";
+        self.cert_client
+            .import_cert(cert_id, certificates.as_bytes())
+            .await
+            .map_err(|err| Error::Internal(InternalError::CreateCertificate(Box::new(err))))?;
+
+        Ok(())
     }
 
     fn get_backup_provisioning_info(
