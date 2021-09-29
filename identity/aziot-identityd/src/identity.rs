@@ -592,14 +592,17 @@ impl IdentityManager {
         provisioning: config::Provisioning,
         skip_if_backup_is_valid: bool,
     ) -> Result<aziot_identity_common::ProvisioningStatus, Error> {
-        // TODO: Delete any existing trust bundle provided by DPS. It may no longer be valid after reprovision.
-
         let device = match provisioning.provisioning {
             config::ProvisioningType::Manual {
                 iothub_hostname,
                 device_id,
                 authentication,
             } => {
+                // Remove any DPS-provided trust bundle, which won't be valid after changing provisioning type to manual.
+                if let Ok(()) = self.cert_client.delete_cert("dps-trust-bundle").await {
+                    log::info!("Removed DPS-provided trust bundle.");
+                }
+
                 let credentials = match authentication {
                     config::ManualAuthMethod::SharedPrivateKey { device_id_pk } => {
                         aziot_identity_common::Credentials::SharedPrivateKey(device_id_pk)
