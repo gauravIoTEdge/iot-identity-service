@@ -592,32 +592,32 @@ impl IdentityManager {
         provisioning: config::Provisioning,
         skip_if_backup_is_valid: bool,
     ) -> Result<aziot_identity_common::ProvisioningStatus, Error> {
+        // Remove any DPS-provided trust bundle, which might not be valid after reprovisioning.
+        if self
+            .cert_client
+            .get_cert(&self.dps_trust_bundle)
+            .await
+            .is_ok()
+        {
+            match self.cert_client.delete_cert(&self.dps_trust_bundle).await {
+                Ok(()) => log::info!(
+                    "Removed DPS-provided trust bundle {}.",
+                    &self.dps_trust_bundle
+                ),
+                Err(err) => log::warn!(
+                    "Failed to remove DPS-provided trust bundle {}: {}",
+                    &self.dps_trust_bundle,
+                    err
+                ),
+            }
+        }
+
         let device = match provisioning.provisioning {
             config::ProvisioningType::Manual {
                 iothub_hostname,
                 device_id,
                 authentication,
             } => {
-                // Remove any DPS-provided trust bundle, which won't be valid after changing provisioning type to manual.
-                if self
-                    .cert_client
-                    .get_cert(&self.dps_trust_bundle)
-                    .await
-                    .is_ok()
-                {
-                    match self.cert_client.delete_cert(&self.dps_trust_bundle).await {
-                        Ok(()) => log::info!(
-                            "Removed DPS-provided trust bundle {}.",
-                            &self.dps_trust_bundle
-                        ),
-                        Err(err) => log::warn!(
-                            "Failed to remove DPS-provided trust bundle {}: {}",
-                            &self.dps_trust_bundle,
-                            err
-                        ),
-                    }
-                }
-
                 let credentials = match authentication {
                     config::ManualAuthMethod::SharedPrivateKey { device_id_pk } => {
                         aziot_identity_common::Credentials::SharedPrivateKey(device_id_pk)
