@@ -26,6 +26,7 @@ pub fn run(
         localid,
         cloud_timeout_sec,
         cloud_retries,
+        dps_trust_bundle,
         mut aziot_keys,
         mut preloaded_keys,
         cert_issuance,
@@ -272,6 +273,8 @@ pub fn run(
         cloud_timeout_sec,
 
         cloud_retries,
+
+        dps_trust_bundle,
 
         principal: vec![],
 

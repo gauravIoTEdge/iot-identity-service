@@ -19,6 +19,7 @@ pub struct IdentityManager {
     homedir_path: std::path::PathBuf,
     req_timeout: std::time::Duration,
     req_retries: u32,
+    dps_trust_bundle: String,
     key_client: Arc<aziot_key_client_async::Client>,
     key_engine: Arc<futures_util::lock::Mutex<openssl2::FunctionalEngine>>,
     cert_client: Arc<aziot_cert_client_async::Client>,
@@ -29,9 +30,7 @@ pub struct IdentityManager {
 
 impl IdentityManager {
     pub fn new(
-        homedir_path: std::path::PathBuf,
-        req_timeout: std::time::Duration,
-        req_retries: u32,
+        settings: &config::Settings,
         key_client: Arc<aziot_key_client_async::Client>,
         key_engine: Arc<futures_util::lock::Mutex<openssl2::FunctionalEngine>>,
         cert_client: Arc<aziot_cert_client_async::Client>,
@@ -40,9 +39,10 @@ impl IdentityManager {
         proxy_uri: Option<hyper::Uri>,
     ) -> Self {
         IdentityManager {
-            homedir_path,
-            req_timeout,
-            req_retries,
+            homedir_path: settings.homedir.clone(),
+            req_timeout: std::time::Duration::from_secs(settings.cloud_timeout_sec),
+            req_retries: settings.cloud_retries,
+            dps_trust_bundle: settings.dps_trust_bundle.clone(),
             key_client,
             key_engine,
             cert_client,
@@ -599,8 +599,23 @@ impl IdentityManager {
                 authentication,
             } => {
                 // Remove any DPS-provided trust bundle, which won't be valid after changing provisioning type to manual.
-                if let Ok(()) = self.cert_client.delete_cert("dps-trust-bundle").await {
-                    log::info!("Removed DPS-provided trust bundle.");
+                if self
+                    .cert_client
+                    .get_cert(&self.dps_trust_bundle)
+                    .await
+                    .is_ok()
+                {
+                    match self.cert_client.delete_cert(&self.dps_trust_bundle).await {
+                        Ok(()) => log::info!(
+                            "Removed DPS-provided trust bundle {}.",
+                            &self.dps_trust_bundle
+                        ),
+                        Err(err) => log::warn!(
+                            "Failed to remove DPS-provided trust bundle {}: {}",
+                            &self.dps_trust_bundle,
+                            err
+                        ),
+                    }
                 }
 
                 let credentials = match authentication {
@@ -798,22 +813,26 @@ impl IdentityManager {
         for cert in trust_bundle.certificates {
             certificates.push_str(&cert.certificate);
 
-            if certificates
-                .chars()
-                .last()
-                .expect("certs should not be empty")
-                != '\n'
-            {
+            let last = certificates.chars().last().ok_or_else(|| {
+                Error::Internal(InternalError::CreateCertificate(Box::new(
+                    std::io::Error::new(std::io::ErrorKind::InvalidData, "empty DPS trust bundle"),
+                )))
+            })?;
+
+            if last != '\n' {
                 certificates.push('\n');
             }
         }
 
-        // TODO: Decide on name and update the iotedge tool to auth identityd for this cert.
-        let cert_id = "dps-trust-bundle";
         self.cert_client
-            .import_cert(cert_id, certificates.as_bytes())
+            .import_cert(&self.dps_trust_bundle, certificates.as_bytes())
             .await
             .map_err(|err| Error::Internal(InternalError::CreateCertificate(Box::new(err))))?;
+
+        log::info!(
+            "Saved DPS-provisioned trust bundle as {}.",
+            &self.dps_trust_bundle
+        );
 
         Ok(())
     }
